@@ -46,36 +46,44 @@ final class Compiler {
     // MARK: Top level
 
     func run() throws(SoniqleError) -> CompiledStatement {
-        var parts: [String] = ["SELECT"]
-        if query.isDistinct { parts.append("DISTINCT") }
-        parts.append(try renderSelections())
-        parts.append("FROM")
-        parts.append(renderTable(query.from))
-        for join in query.joins { parts.append(try renderJoin(join)) }
+        // Append fragments straight into one buffer rather than collecting a `[String]`
+        // and `joined`-ing it. Every clause is emitted in SQL text order, single-spaced;
+        // the first fragment ("SELECT") seeds `sql`, each later one is prefixed with a space.
+        var sql = "SELECT"
+        sql.reserveCapacity(256)
+        func add(_ fragment: String) {
+            sql += " "
+            sql += fragment
+        }
+
+        if query.isDistinct { add("DISTINCT") }
+        add(try renderSelections())
+        add("FROM")
+        add(renderTable(query.from))
+        for join in query.joins { add(try renderJoin(join)) }
 
         if let wherePredicate = query.wherePredicate {
-            parts.append("WHERE")
-            parts.append(try renderPredicate(wherePredicate))
+            add("WHERE")
+            add(try renderPredicate(wherePredicate))
         }
         if !query.groupBy.isEmpty {
             var columns: [String] = []
             columns.reserveCapacity(query.groupBy.count)
             for column in query.groupBy { columns.append(try renderColumn(column)) }
-            parts.append("GROUP BY")
-            parts.append(columns.joined(separator: ", "))
+            add("GROUP BY")
+            add(columns.joined(separator: ", "))
         }
         if let having = query.having {
-            parts.append("HAVING")
-            parts.append(try renderPredicate(having))
+            add("HAVING")
+            add(try renderPredicate(having))
         }
         if !query.orderBy.isEmpty {
-            parts.append("ORDER BY")
-            parts.append(try renderOrderBy(query.orderBy))
+            add("ORDER BY")
+            add(try renderOrderBy(query.orderBy))
         }
-        if let limit = query.limit { parts.append(try renderLimitClause(limit, keyword: "LIMIT")) }
-        if let offset = query.offset { parts.append(try renderLimitClause(offset, keyword: "OFFSET")) }
+        if let limit = query.limit { add(try renderLimitClause(limit, keyword: "LIMIT")) }
+        if let offset = query.offset { add(try renderLimitClause(offset, keyword: "OFFSET")) }
 
-        let sql = parts.joined(separator: " ")
         guard sql.unicodeScalars.count <= options.maxSQLLength else {
             throw SoniqleError(
                 code: .outputTooLarge,

@@ -26,13 +26,13 @@ final class JSONParser {
     // MARK: Entry point
 
     static func parse(
-        jsonBytes: [UInt8],
+        jsonData: Data,
         maxIdentifierLength: Int,
         maxDepth: Int
     ) throws(SoniqleError) -> SelectQuery {
         let root: JSONValue
         do {
-            root = try JSONDecoder().decode(JSONValue.self, from: Data(jsonBytes))
+            root = try JSONDecoder().decode(JSONValue.self, from: jsonData)
         } catch {
             throw SoniqleError(
                 code: .malformedJSON,
@@ -322,7 +322,10 @@ final class JSONParser {
         guard let elements = value.arrayElements, let head = elements.first?.stringValue else {
             throw err(.unexpectedShape, "a predicate must be an array beginning with an operator", path)
         }
-        let operands = Array(elements.dropFirst())
+        // A lazy slice, not a copy: `operands` is only ever read here. `elements` is a
+        // whole array from `JSONValue.array`, so the slice is indexed `1 ..< elements.count`
+        // — positional reads below rebase through `operands.startIndex`.
+        let operands = elements.dropFirst()
 
         switch head {
         case "and", "or":
@@ -340,7 +343,7 @@ final class JSONParser {
             guard operands.count == 1 else {
                 throw err(.operatorArityMismatch, "'not' takes exactly one operand", path)
             }
-            return .not(try parsePredicate(operands[0], at: "\(path)/1", depth: depth + 1))
+            return .not(try parsePredicate(operands[operands.startIndex], at: "\(path)/1", depth: depth + 1))
 
         case "=", "==":
             return try comparison(.equal, operands, path)
@@ -359,18 +362,19 @@ final class JSONParser {
             guard operands.count == 2 else {
                 throw err(.operatorArityMismatch, "'\(head)' takes [expression, :parameter]", path)
             }
-            if operands[1].arrayElements != nil {
+            let base = operands.startIndex
+            if operands[base + 1].arrayElements != nil {
                 throw err(
                     .unsupportedFeature,
                     "inline value lists are not supported; pass an array :parameter",
                     "\(path)/2"
                 )
             }
-            guard let token = operands[1].stringValue, token.first == ":" else {
+            guard let token = operands[base + 1].stringValue, token.first == ":" else {
                 throw err(.unexpectedShape, "the right side of '\(head)' must be a :parameter", "\(path)/2")
             }
             return .inList(
-                try parseExpression(operands[0], at: "\(path)/1"),
+                try parseExpression(operands[base], at: "\(path)/1"),
                 parameter: try parameterName(token, at: "\(path)/2"),
                 negated: head == "not-in"
             )
@@ -379,17 +383,18 @@ final class JSONParser {
             guard operands.count == 3 else {
                 throw err(.operatorArityMismatch, "'between' takes [expression, lower, upper]", path)
             }
+            let base = operands.startIndex
             return .between(
-                try parseExpression(operands[0], at: "\(path)/1"),
-                lower: try parseExpression(operands[1], at: "\(path)/2"),
-                upper: try parseExpression(operands[2], at: "\(path)/3")
+                try parseExpression(operands[base], at: "\(path)/1"),
+                lower: try parseExpression(operands[base + 1], at: "\(path)/2"),
+                upper: try parseExpression(operands[base + 2], at: "\(path)/3")
             )
 
         case "is-null", "is-not-null":
             guard operands.count == 1 else {
                 throw err(.operatorArityMismatch, "'\(head)' takes exactly one operand", path)
             }
-            return .isNull(try parseExpression(operands[0], at: "\(path)/1"), negated: head == "is-not-null")
+            return .isNull(try parseExpression(operands[operands.startIndex], at: "\(path)/1"), negated: head == "is-not-null")
 
         case "like", "not-like":
             let (expr, param) = try textOperands(operands, head: head, path: path)
@@ -412,32 +417,34 @@ final class JSONParser {
 
     private func comparison(
         _ op: ComparisonOperator,
-        _ operands: [JSONValue],
+        _ operands: ArraySlice<JSONValue>,
         _ path: String
     ) throws(SoniqleError) -> Predicate {
         guard operands.count == 2 else {
             throw err(.operatorArityMismatch, "'\(op.rawValue)' takes exactly two operands", path)
         }
+        let base = operands.startIndex
         return .compare(
             op,
-            try parseExpression(operands[0], at: "\(path)/1"),
-            try parseExpression(operands[1], at: "\(path)/2")
+            try parseExpression(operands[base], at: "\(path)/1"),
+            try parseExpression(operands[base + 1], at: "\(path)/2")
         )
     }
 
     private func textOperands(
-        _ operands: [JSONValue],
+        _ operands: ArraySlice<JSONValue>,
         head: String,
         path: String
     ) throws(SoniqleError) -> (Expression, String) {
         guard operands.count == 2 else {
             throw err(.operatorArityMismatch, "'\(head)' takes [expression, :parameter]", path)
         }
-        guard let token = operands[1].stringValue, token.first == ":" else {
+        let base = operands.startIndex
+        guard let token = operands[base + 1].stringValue, token.first == ":" else {
             throw err(.unexpectedShape, "the right side of '\(head)' must be a :parameter", "\(path)/2")
         }
         return (
-            try parseExpression(operands[0], at: "\(path)/1"),
+            try parseExpression(operands[base], at: "\(path)/1"),
             try parameterName(token, at: "\(path)/2")
         )
     }

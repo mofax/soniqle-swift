@@ -1,3 +1,9 @@
+#if canImport(FoundationEssentials)
+internal import FoundationEssentials
+#else
+internal import Foundation
+#endif
+
 ///
 /// ```swift
 /// let soniqle = Soniqle.postgres()
@@ -74,7 +80,7 @@ public struct Soniqle: Sendable {
         json: String,
         parameters: [String: SQLValue]
     ) throws(SoniqleError) -> CompiledStatement {
-        try compile(json: Array(json.utf8), parameters: parameters)
+        try compile(jsonData: Data(json.utf8), parameters: parameters)
     }
 
     /// Compile a JSON query document supplied as raw UTF-8 bytes.
@@ -82,8 +88,17 @@ public struct Soniqle: Sendable {
         json: some Sequence<UInt8>,
         parameters: [String: SQLValue]
     ) throws(SoniqleError) -> CompiledStatement {
+        try compile(jsonData: Data(json), parameters: parameters)
+    }
+
+    /// Shared decode + compile path. The input is materialised into `Data` exactly once
+    /// (the form `JSONDecoder` requires); no intermediate `[UInt8]` copy.
+    private func compile(
+        jsonData: Data,
+        parameters: [String: SQLValue]
+    ) throws(SoniqleError) -> CompiledStatement {
         let query = try JSONParser.parse(
-            jsonBytes: Array(json),
+            jsonData: jsonData,
             maxIdentifierLength: dialect.maxIdentifierLength,
             maxDepth: options.maxDepth
         )
